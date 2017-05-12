@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <string>
 #include <thread>
+#include "stdarg.h"
 
 template<typename T> class ThreadSafeQueue
 {
@@ -64,11 +65,25 @@ public:
 	ThreadSafeQueue& operator=(const ThreadSafeQueue&) = delete;
 };
 
+enum LogLevel
+{
+	LOG_QUIET = -1,
+	LOG_INFO = 0,
+	LOG_ERROR,
+	LOG_DEBUG,
+	LOG_TRACE
+};
+
 class Logger
 {
+	LogLevel default_level = LOG_ERROR;
+
 	FILE* file;
+
 	ThreadSafeQueue<std::string> message_queue_;
+
 	bool quit_{ false };
+
 	std::thread writer_thread_;
 
 	std::string CurrentDateTime() const
@@ -85,32 +100,25 @@ class Logger
 		return current_date_time;
 	}
 
-	void WriteToFile(FILE* file, ThreadSafeQueue<std::string>& queue)
-	{
-		std::string message = queue.pop();
-		fputs(message.c_str(), file);
-		fflush(file);
-	}
-
-	void CreateWriterThread()
+	void WriterThread()
 	{
 		writer_thread_ = std::thread([this]{
 			while (!quit_){
-				WriteToFile(file, std::ref(message_queue_));
-			}
-			while (!message_queue_.empty()){
-				WriteToFile(file, std::ref(message_queue_));
+				if (file == nullptr)
+					return;
+				std::string message = message_queue_.pop();
+				fputs(message.c_str(), file);
+				fflush(file);
 			}
 		});
 		writer_thread_.joinable();
 	}
-public:
-	Logger(std::string filename)
+
+	Logger()
 	{
-		file = fopen(filename.c_str(), "w");
-		if (file != nullptr)
-			CreateWriterThread();
+
 	}
+
 	~Logger()
 	{
 		quit_ = true;
@@ -120,9 +128,277 @@ public:
 		}
 	}
 
-	void Write(std::string message)
+	Logger(Logger const&) = delete;
+
+	Logger& operator = (Logger const&) = delete;
+public:
+
+	static Logger& GetInstance()
 	{
-		auto output_message ="\n" + CurrentDateTime() + "\t" + message;
+		static Logger logger;
+		return logger;
+	}
+
+	void SetLogFile(std::string filename)
+	{
+		file = fopen(filename.c_str(), "a+");
+		if (file != nullptr)
+			WriterThread();
+	}
+
+	void SetLogLevel(LogLevel level)
+	{
+		default_level = level;
+	}
+
+	void PushToQueue(LogLevel log_level, va_list list, const char* format)
+	{
+		std::string output_message = CurrentDateTime();
+		switch (log_level){
+			case LOG_QUIET:
+				return;
+			case LOG_INFO:
+				output_message += "|INFO|";
+				break;
+			case LOG_ERROR:
+				output_message += "|ERROR|";
+				break;
+			case LOG_DEBUG:
+				output_message += "|DEBUG|";
+				break;
+			case LOG_TRACE:
+				output_message += "|TRACE|";
+				break;
+			default:
+				break;
+		}
+		while (*format != '\0'){
+			switch (*format){
+				case 'i':
+					output_message += std::to_string(va_arg(list, int)) + "|";
+					format++;
+					break;
+				case 'd':
+					output_message += std::to_string(va_arg(list, double)) + "|";
+					format++;
+					break;
+				case 'f':
+					output_message += std::to_string(va_arg(list, float)) + "|";
+					format++;
+					break;
+				case 'c':
+					output_message += va_arg(list, char) + "|";
+					format++;
+					break;
+				case 's':
+					output_message += static_cast<std::string>(va_arg(list, char *)) + "|";
+					format++;
+					break;
+				case 'S':
+					output_message += va_arg(list, std::string) + "|";
+					format++;
+					break;
+				default:
+					format++;
+					break;
+			}
+		}
+		va_end(list);
+		output_message += "\n";
+		message_queue_.push(output_message);
+	}
+
+	void Info(const char* format, std::string ...)
+	{
+		if (default_level != LOG_INFO)
+			return;
+		va_list list;
+		va_start(list, format);
+		PushToQueue(LOG_INFO, list, format);
+		/*std::string output_message = CurrentDateTime() + "|INFO|";
+		va_start(list, format);
+		while (*format != '\0'){
+		switch (*format){
+		case 'i':
+		output_message += std::to_string(va_arg(list, int)) + "|";
+		format++;
+		break;
+		case 'd':
+		output_message += std::to_string(va_arg(list, double)) + "|";
+		format++;
+		break;
+		case 'f':
+		output_message += std::to_string(va_arg(list, float)) + "|";
+		format++;
+		break;
+		case 'c':
+		output_message += va_arg(list, char) + "|";
+		format++;
+		break;
+		case 's':
+		output_message += static_cast<std::string>(va_arg(list, char *)) + "|";
+		format++;
+		break;
+		case 'S':
+		output_message += va_arg(list, std::string) + "|";
+		format++;
+		break;
+		default:
+		format++;
+		break;
+		}
+		}
+		va_end(list);
+		output_message += "\n";
+		message_queue_.push(output_message);*/
+
+	}
+
+	void Error(const char* format, std::string ...)
+	{
+		if (default_level != LOG_ERROR)
+			return;
+
+		std::string output_message = CurrentDateTime() + "|ERROR|";
+		va_list list;
+		int i;
+		va_start(list, format);
+		while (*format != '\0'){
+			switch (*format){
+				case 'i':
+					output_message += std::to_string(va_arg(list, int)) + "|";
+					format++;
+					break;
+				case 'd':
+					output_message += std::to_string(va_arg(list, double)) + "|";
+					format++;
+					break;
+				case 'f':
+					output_message += std::to_string(va_arg(list, float)) + "|";
+					format++;
+					break;
+				case 'c':
+					output_message += va_arg(list, char) + "|";
+					format++;
+					break;
+				case 's':
+					output_message += static_cast<std::string>(va_arg(list, char *)) + "|";
+					format++;
+					break;
+				case 'S':
+					output_message += va_arg(list, std::string) + "|";
+					format++;
+					break;
+				default:
+					format++;
+					break;
+			}
+		}
+		va_end(list);
+		output_message += "\n";
+
+		message_queue_.push(output_message);
+
+	}
+
+	void Debug(const char* format, std::string ...)
+	{
+		if (default_level != LOG_DEBUG)
+			return;
+
+		std::string output_message = CurrentDateTime() + "|DEBUG|";
+		va_list list;
+		int i;
+		va_start(list, format);
+		while (*format != '\0'){
+			switch (*format){
+				case 'i':
+					output_message += std::to_string(va_arg(list, int)) + "|";
+					format++;
+					break;
+				case 'd':
+					output_message += std::to_string(va_arg(list, double)) + "|";
+					format++;
+					break;
+				case 'f':
+					output_message += std::to_string(va_arg(list, float)) + "|";
+					format++;
+					break;
+				case 'c':
+					output_message += va_arg(list, char) + "|";
+					format++;
+					break;
+				case 's':
+					output_message += static_cast<std::string>(va_arg(list, char *)) + "|";
+					format++;
+					break;
+				case 'S':
+					output_message += va_arg(list, std::string) + "|";
+					format++;
+					break;
+				default:
+					format++;
+					break;
+			}
+		}
+		va_end(list);
+		output_message += "\n";
+
+		message_queue_.push(output_message);
+
+	}
+
+	void Trace(const char* format, std::string ...)
+	{
+		if (default_level != LOG_DEBUG)
+			return;
+
+		std::string output_message = CurrentDateTime() + "|TRACE|";
+		va_list list;
+		int i;
+		va_start(list, format);
+		while (*format != '\0'){
+			switch (*format){
+				case 'i':
+					output_message += std::to_string(va_arg(list, int)) + "|";
+					format++;
+					break;
+				case 'd':
+					output_message += std::to_string(va_arg(list, double)) + "|";
+					format++;
+					break;
+				case 'f':
+					output_message += std::to_string(va_arg(list, float)) + "|";
+					format++;
+					break;
+				case 'c':
+					output_message += va_arg(list, char) + "|";
+					format++;
+					break;
+				case 's':
+					output_message += static_cast<std::string>(va_arg(list, char *)) + "|";
+					format++;
+					break;
+				case 'S':
+					output_message += va_arg(list, std::string) + "|";
+					format++;
+					break;
+				default:
+					format++;
+					break;
+			}
+		}
+		va_end(list);
+		output_message += "\n";
+
+		message_queue_.push(output_message);
+
+	}
+
+	void WriteLine(std::string message)
+	{
+		std::string output_message = "";
+		output_message = CurrentDateTime() + "\t" + message + "\n";
 		message_queue_.push(output_message);
 	}
 };
